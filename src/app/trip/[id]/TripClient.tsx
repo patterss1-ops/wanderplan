@@ -26,6 +26,7 @@ import {
   Check
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
+import MapView from '@/components/MapView';
 import type { User } from '@supabase/supabase-js';
 import type { Profile, Trip, TripMember, SavedItem, ItemCategory, BookingStatus } from '@/types/database';
 
@@ -383,13 +384,20 @@ export default function TripClient({ trip: initialTrip, user, profile }: TripCli
                 ))}
               </div>
             ) : (
-              <div className="bg-card rounded-2xl border border-border h-[600px] flex items-center justify-center">
-                <div className="text-center text-muted">
-                  <MapIcon className="w-12 h-12 mx-auto mb-2 opacity-50" />
-                  <p>Map view coming soon!</p>
-                  <p className="text-sm">Connect your Mapbox API key to enable maps</p>
-                </div>
-              </div>
+              <MapView
+                items={filteredItems.map(item => ({
+                  id: item.id,
+                  title: item.title,
+                  description: item.description,
+                  category: item.category,
+                  latitude: item.latitude,
+                  longitude: item.longitude,
+                  place_name: item.place_name,
+                  booking_status: item.booking_status,
+                  is_anchor: item.is_anchor,
+                }))}
+                className="h-[600px] rounded-2xl border border-border"
+              />
             )}
           </main>
         </div>
@@ -641,14 +649,68 @@ function AddItemModal({
   onAdd: (data: Partial<SavedItem>) => void;
 }) {
   const [loading, setLoading] = useState(false);
+  const [geocoding, setGeocoding] = useState(false);
+  const [locationSuggestions, setLocationSuggestions] = useState<Array<{
+    place_name: string;
+    center: [number, number];
+  }>>([]);
   const [formData, setFormData] = useState({
     title: '',
     url: '',
     category: 'other' as ItemCategory,
     place_name: '',
+    latitude: null as number | null,
+    longitude: null as number | null,
     notes: '',
     price_estimate: '',
   });
+
+  // Debounced geocoding search
+  useEffect(() => {
+    if (!formData.place_name || formData.place_name.length < 3) {
+      setLocationSuggestions([]);
+      return;
+    }
+
+    const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+    if (!token) return;
+
+    const timer = setTimeout(async () => {
+      setGeocoding(true);
+      try {
+        const response = await fetch(
+          `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(
+            formData.place_name
+          )}.json?access_token=${token}&limit=5`
+        );
+        const data = await response.json();
+        if (data.features) {
+          setLocationSuggestions(
+            data.features.map((f: { place_name: string; center: [number, number] }) => ({
+              place_name: f.place_name,
+              center: f.center,
+            }))
+          );
+        }
+      } catch (error) {
+        console.error('Geocoding error:', error);
+      } finally {
+        setGeocoding(false);
+      }
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [formData.place_name]);
+
+  const selectLocation = (suggestion: { place_name: string; center: [number, number] }) => {
+    setFormData({
+      ...formData,
+      place_name: suggestion.place_name,
+      longitude: suggestion.center[0],
+      latitude: suggestion.center[1],
+    });
+    setLocationSuggestions([]);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -659,6 +721,8 @@ function AddItemModal({
       url: formData.url || undefined,
       category: formData.category,
       place_name: formData.place_name || undefined,
+      latitude: formData.latitude ?? undefined,
+      longitude: formData.longitude ?? undefined,
       notes: formData.notes || undefined,
       price_estimate: formData.price_estimate ? parseFloat(formData.price_estimate) : undefined,
     });
@@ -743,15 +807,44 @@ function AddItemModal({
             />
           </div>
 
-          <div>
+          <div className="relative">
             <label className="block text-sm font-medium mb-2">Location (optional)</label>
-            <input
-              type="text"
-              value={formData.place_name}
-              onChange={(e) => setFormData({ ...formData, place_name: e.target.value })}
-              placeholder="e.g., Sydney, Australia"
-              className="w-full px-4 py-3 border border-border rounded-xl bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
+            <div className="relative">
+              <input
+                type="text"
+                value={formData.place_name}
+                onChange={(e) => setFormData({ ...formData, place_name: e.target.value, latitude: null, longitude: null })}
+                placeholder="e.g., Sydney, Australia"
+                className="w-full px-4 py-3 border border-border rounded-xl bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              {geocoding && (
+                <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-muted" />
+              )}
+              {formData.latitude && formData.longitude && (
+                <Check className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-green-500" />
+              )}
+            </div>
+            {/* Location suggestions dropdown */}
+            {locationSuggestions.length > 0 && (
+              <div className="absolute z-10 w-full mt-1 bg-card border border-border rounded-xl shadow-lg overflow-hidden">
+                {locationSuggestions.map((suggestion, index) => (
+                  <button
+                    key={index}
+                    type="button"
+                    onClick={() => selectLocation(suggestion)}
+                    className="w-full px-4 py-3 text-left hover:bg-muted/10 transition-colors flex items-center gap-3 border-b border-border last:border-0"
+                  >
+                    <MapPin className="w-4 h-4 text-muted flex-shrink-0" />
+                    <span className="text-sm truncate">{suggestion.place_name}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            {formData.latitude && formData.longitude && (
+              <p className="text-xs text-muted mt-1">
+                Coordinates: {formData.latitude.toFixed(4)}, {formData.longitude.toFixed(4)}
+              </p>
+            )}
           </div>
 
           <div>
